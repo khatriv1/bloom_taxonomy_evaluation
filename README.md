@@ -1,6 +1,6 @@
 # Bloom Taxonomy Classification Evaluation
 
-This project evaluates different prompting techniques for classifying learning outcomes using Bloom's Taxonomy. It compares multiple advanced LLM prompting strategies to determine which best matches human expert classifications of educational learning outcomes.
+This project evaluates different prompting techniques for classifying learning outcomes using Bloom's Taxonomy. It compares nine advanced LLM prompting strategies to determine which best matches human expert classifications of educational learning outcomes.
 
 ## Project Overview
 
@@ -79,9 +79,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Configure your OpenAI API key in `config.py`:
-```python
-OPENAI_API_KEY = "your-api-key-here"
+4. Configure your OpenAI API key:
+```bash
+cp config_example.py config.py
 ```
 
 5. Ensure the Bloom taxonomy dataset is in the data directory.
