@@ -29,21 +29,21 @@ The project classifies learning outcomes into 6 Bloom taxonomy categories:
 ```
 bloom_taxonomy_evaluation/
 ├── data/
-│   └── sample_full.csv         # Learning outcomes with Bloom classifications
+│   └── sample_full.csv         
 ├── prompting/
-│   ├── zero_shot.py           # Zero-shot prompting
-│   ├── cot.py                 # Chain of Thought
-│   ├── few_shot.py            # Few-shot with examples
-│   ├── active_prompt.py       # Active learning selection
-│   ├── auto_cot.py            # Automatic CoT generation
-│   ├── contrastive_cot.py     # Contrastive reasoning
-│   ├── rephrase_and_respond.py # Clarification approach
-│   ├── self_consistency.py    # Multiple sampling
-│   └── take_a_step_back.py    # Abstract reasoning
+│   ├── zero_shot.py           
+│   ├── cot.py                 
+│   ├── few_shot.py            
+│   ├── active_prompt.py       
+│   ├── auto_cot.py            
+│   ├── contrastive_cot.py     
+│   ├── rephrase_and_respond.py 
+│   ├── self_consistency.py    
+│   └── take_a_step_back.py    
 ├── utils/
-│   ├── data_loader.py         # Loads and processes Bloom data
-│   ├── bloom_rubric.py        # Category definitions and examples
-│   └── metrics.py             # Evaluation metrics
+│   ├── data_loader.py         
+│   ├── bloom_rubric.py        
+│   └── metrics.py             
 ├── evaluation/
 │   ├── evaluate_zero_shot.py
 │   ├── evaluate_cot.py
@@ -54,17 +54,17 @@ bloom_taxonomy_evaluation/
 │   ├── evaluate_rephrase_respond.py
 │   ├── evaluate_self_consistency.py
 │   └── evaluate_take_step_back.py
-├── results/                   # Generated results directory
-├── config.py                  # Configuration and API keys
-├── main.py                    # Main evaluation script
-└── requirements.txt           # Python dependencies
+├── results/                   
+├── config.py                 
+├── main.py                   
+└── requirements.txt           
 ```
 
 ## Setup Instructions
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-repo/bloom-taxonomy-evaluation.git
+git clone https://github.com/khatriv1/bloom_taxonomy_evaluation.git
 cd bloom-taxonomy-evaluation
 ```
 
