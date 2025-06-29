@@ -2,165 +2,63 @@
 
 """
 Few-shot prompting for Bloom taxonomy classification.
-Provides examples before asking for classification.
+Binary version: Returns 1/0 decisions for each category (like human experts).
 """
 
 import time
-from typing import Optional
+import json
+import re
+from typing import Optional, Dict
 from utils.bloom_rubric import BloomRubric
 
-def get_few_shot_examples(category: str) -> str:
-    """Get few-shot examples for each category."""
-    examples = {
-        'remember': [
-            ("Students will list the major battles of World War II", "true"),
-            ("Students will identify the parts of a cell", "true"),
-            ("Students will analyze the causes of poverty", "false")
-        ],
-        'understand': [
-            ("Students will explain the water cycle process", "true"),
-            ("Students will describe the main themes in the novel", "true"),
-            ("Students will memorize multiplication tables", "false")
-        ],
-        'apply': [
-            ("Students will solve quadratic equations using formulas", "true"),
-            ("Students will demonstrate proper laboratory procedures", "true"),
-            ("Students will list the periodic table elements", "false")
-        ],
-        'analyze': [
-            ("Students will compare different economic systems", "true"),
-            ("Students will examine the causes of climate change", "true"),
-            ("Students will recite the Pledge of Allegiance", "false")
-        ],
-        'evaluate': [
-            ("Students will assess the credibility of news sources", "true"),
-            ("Students will critique different research methodologies", "true"),
-            ("Students will explain photosynthesis", "false")
-        ],
-        'create': [
-            ("Students will design an original experiment", "true"),
-            ("Students will compose an original poem", "true"),
-            ("Students will calculate the area of a triangle", "false")
-        ]
-    }
-    
-    # Format examples for prompt
-    formatted_examples = []
-    for outcome, label in examples.get(category, []):
-        formatted_examples.append(f"Learning Outcome: {outcome}\nAnswer: {label}")
-    
-    return "\n\n".join(formatted_examples)
-
-def get_few_shot_prediction(learning_outcome: str,
-                          client,
-                          category: str) -> Optional[bool]:
-    """
-    Get few-shot prediction for a single category.
-    
-    Args:
-        learning_outcome: The learning outcome text
-        client: OpenAI client
-        category: Category to classify for
-    
-    Returns:
-        Boolean indicating if outcome belongs to category, None if failed
-    """
-    rubric = BloomRubric()
-    prompt_descriptions = rubric.get_prompt_descriptions()
-    
-    if category not in prompt_descriptions:
-        raise ValueError(f"Unknown category: {category}")
-    
-    # Get examples for this category
-    examples = get_few_shot_examples(category)
-    
-    # Create few-shot prompt
-    prompt = f"""You are classifying learning outcomes according to Bloom's Taxonomy.
-
-Category: {category}
-Definition: {prompt_descriptions[category]}
-
-Here are some examples:
-
-{examples}
-
-Now classify this learning outcome:
-
-Learning Outcome: {learning_outcome}
-
-Answer:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at analyzing learning outcomes using Bloom's Taxonomy. Respond only with 'true' or 'false'."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=10
-        )
-        
-        result = response.choices[0].message.content.strip().lower()
-        
-        if result == "true":
-            return True
-        elif result == "false":
-            return False
-        else:
-            print(f"Unexpected response for {category}: {result}")
-            return None
-            
-    except Exception as e:
-        print(f"Error getting few-shot prediction for {category}: {str(e)}")
-        return None
-
-
-def get_few_shot_prediction_single_category(learning_outcome: str,
-                                           client) -> str:
-    """
-    Get few-shot prediction for the single best Bloom category.
-    
-    Args:
-        learning_outcome: The learning outcome text
-        client: OpenAI client
-    
-    Returns:
-        Single category name that best fits the learning outcome
-    """
-    categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
-    
-    # Create examples for all categories
-    all_examples = """
+def get_few_shot_examples_binary() -> str:
+    """Get few-shot examples with binary classification."""
+    examples = """
 EXAMPLES:
 
 Learning Outcome: "Students will memorize the periodic table of elements"
-Classification: remember
+Binary Labels: {"remember": 1, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}
 Explanation: This requires retrieving factual information from memory.
 
 Learning Outcome: "Students will explain the process of photosynthesis"
-Classification: understand
-Explanation: This requires comprehending and expressing the meaning of biological processes.
+Binary Labels: {"remember": 0, "understand": 1, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}
+Explanation: This requires comprehending and expressing meaning of biological processes.
 
 Learning Outcome: "Students will use statistical formulas to solve probability problems"
-Classification: apply
+Binary Labels: {"remember": 0, "understand": 0, "apply": 1, "analyze": 0, "evaluate": 0, "create": 0}
 Explanation: This requires carrying out procedures in specific situations.
 
 Learning Outcome: "Students will compare and contrast different economic theories"
-Classification: analyze
-Explanation: This requires breaking down concepts and examining relationships between parts.
+Binary Labels: {"remember": 0, "understand": 0, "apply": 0, "analyze": 1, "evaluate": 0, "create": 0}
+Explanation: This requires breaking down concepts and examining relationships.
 
 Learning Outcome: "Students will assess the validity of research methodology in published studies"
-Classification: evaluate
+Binary Labels: {"remember": 0, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 1, "create": 0}
 Explanation: This requires making judgments based on criteria and standards.
 
 Learning Outcome: "Students will develop an original research proposal for their thesis"
-Classification: create
-Explanation: This requires putting elements together to form something novel and coherent.
+Binary Labels: {"remember": 0, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 0, "create": 1}
+Explanation: This requires putting elements together to form something novel.
 """
+    return examples
 
+def get_few_shot_prediction_binary_class(learning_outcome: str, client) -> Dict[str, int]:
+    """
+    Get few-shot binary prediction for all 6 Bloom categories.
+    
+    Args:
+        learning_outcome: The learning outcome text
+        client: OpenAI client
+    
+    Returns:
+        Dictionary with 1/0 decisions for all 6 categories
+    """
+    categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
+    
     rubric = BloomRubric()
     category_definitions = rubric.get_category_definitions()
+    
+    examples_text = get_few_shot_examples_binary()
     
     definitions_text = ""
     for cat in categories:
@@ -171,18 +69,28 @@ Explanation: This requires putting elements together to form something novel and
 BLOOM'S TAXONOMY CATEGORIES:
 {definitions_text}
 
-{all_examples}
+{examples_text}
 
-TASK: Now classify the following learning outcome into ONE primary Bloom taxonomy category.
+TASK: Now analyze the following learning outcome and decide which Bloom taxonomy categories apply. For each category, respond with 1 if it applies or 0 if it doesn't apply.
 
 Learning Outcome: "{learning_outcome}"
 
 INSTRUCTIONS:
-1. Analyze the learning outcome carefully
-2. Compare it to the examples provided
-3. Determine which Bloom taxonomy level best describes the cognitive demand
-4. Focus on the primary action verb and learning goal
-5. Respond with only the category name: remember, understand, apply, analyze, evaluate, or create
+1. Learn from the examples provided above
+2. Analyze the learning outcome carefully  
+3. For each of the 6 Bloom taxonomy categories, decide: Does this learning outcome require this type of thinking?
+4. Respond with 1 (yes, this category applies) or 0 (no, this category doesn't apply)
+5. Multiple categories can be 1 if the learning outcome involves multiple types of thinking
+6. Respond in this exact JSON format:
+
+{{
+    "remember": 0,
+    "understand": 0,
+    "apply": 0,
+    "analyze": 0,
+    "evaluate": 0,
+    "create": 0
+}}
 
 Classification:"""
 
@@ -190,26 +98,106 @@ Classification:"""
         response = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=[
-                {"role": "system", "content": "You are an expert at classifying learning outcomes using Bloom's Taxonomy. Learn from the examples provided. Respond only with the category name."},
+                {"role": "system", "content": "You are an expert at classifying learning outcomes using Bloom's Taxonomy. Learn from the examples provided. Respond only with valid JSON containing 1 or 0 for each category."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0,
-            max_tokens=20
+            max_tokens=150
         )
         
-        result = response.choices[0].message.content.strip().lower()
+        result = response.choices[0].message.content.strip()
         
-        # Validate and clean the response
-        valid_categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
+        # Extract JSON from response
+        binary_decisions = parse_binary_decisions(result, categories)
         
-        for category in valid_categories:
-            if category in result:
-                return category
-                
-        # If no valid category found, return default
-        print(f"Could not extract valid category from: {result}")
-        return 'understand'  # Default fallback
+        return binary_decisions
         
     except Exception as e:
-        print(f"Error in few-shot classification: {str(e)}")
-        return 'understand'  # Default fallback
+        print(f"Error in few-shot binary classification: {str(e)}")
+        # Return default - no categories selected
+        return {cat: 0 for cat in categories}
+
+def get_few_shot_prediction_single_category(learning_outcome: str, client) -> str:
+    """
+    Get few-shot prediction for the single best Bloom category.
+    Uses binary decisions and returns the first category marked as 1.
+    
+    Args:
+        learning_outcome: The learning outcome text
+        client: OpenAI client
+    
+    Returns:
+        Single category name that best fits the learning outcome
+    """
+    binary_decisions = get_few_shot_prediction_binary_class(learning_outcome, client)
+    
+    # Find categories marked as 1
+    selected_categories = [cat for cat, decision in binary_decisions.items() if decision == 1]
+    
+    if selected_categories:
+        # Return first selected category
+        return selected_categories[0]
+    else:
+        # If no categories selected, default to 'understand'
+        return 'understand'
+
+def parse_binary_decisions(response_text: str, categories: list) -> Dict[str, int]:
+    """
+    Parse binary decisions from model response.
+    
+    Args:
+        response_text: Raw response from the model
+        categories: List of category names
+        
+    Returns:
+        Dictionary with 1/0 decisions for each category
+    """
+    decisions = {}
+    
+    try:
+        # Try to parse as JSON first
+        json_match = re.search(r'\{[^}]+\}', response_text)
+        if json_match:
+            json_str = json_match.group()
+            parsed = json.loads(json_str)
+            
+            for cat in categories:
+                value = parsed.get(cat, 0)
+                # Ensure it's 1 or 0
+                decisions[cat] = 1 if value == 1 else 0
+        else:
+            # Fallback: parse line by line
+            for cat in categories:
+                pattern = rf'"{cat}"\s*:\s*([01])'
+                match = re.search(pattern, response_text)
+                if match:
+                    decisions[cat] = int(match.group(1))
+                else:
+                    decisions[cat] = 0
+                    
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error parsing binary decisions: {e}")
+        # Default fallback - all 0s
+        decisions = {cat: 0 for cat in categories}
+    
+    return decisions
+
+# Alias for backward compatibility with multi-class name
+def get_few_shot_prediction_multi_class(learning_outcome: str, client) -> Dict[str, int]:
+    """Alias for binary classification to maintain compatibility."""
+    return get_few_shot_prediction_binary_class(learning_outcome, client)
+
+# Legacy functions for backwards compatibility
+def get_few_shot_examples(category: str) -> str:
+    """Legacy function - now redirects to binary examples."""
+    return get_few_shot_examples_binary()
+
+def get_few_shot_prediction(learning_outcome: str, client, category: str) -> Optional[bool]:
+    """
+    Legacy function for single category prediction.
+    Now uses binary decisions internally.
+    """
+    binary_decisions = get_few_shot_prediction_binary_class(learning_outcome, client)
+    
+    # Return True if this category is marked as 1
+    return binary_decisions.get(category, 0) == 1

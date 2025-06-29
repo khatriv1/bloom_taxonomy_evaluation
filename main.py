@@ -21,7 +21,7 @@ from evaluation.evaluate_take_step_back import evaluate_take_step_back
 import config
 
 def create_comparison_visualization(comparison_df, output_dir):
-    """Create comparison visualizations for all Bloom techniques using the 4 metrics."""
+    """Create comparison visualizations for all Bloom techniques using the 4 metrics plus binary accuracy."""
     plt.style.use('default')
     
     # Create figure with subplots
@@ -31,15 +31,17 @@ def create_comparison_visualization(comparison_df, output_dir):
     techniques = comparison_df['Technique'].tolist()
     x = np.arange(len(techniques))
     
-    # First subplot: All 4 metrics comparison
-    metrics = ['Accuracy (%)', 'Cohen\'s κ', 'Krippendorff\'s α', 'ICC']
-    colors = ['#2ecc71', '#3498db', '#9b59b6', '#e74c3c']
-    width = 0.2
+    # First subplot: All 5 metrics comparison (4 original + binary accuracy)
+    metrics = ['Primary Accuracy (%)', 'Binary Accuracy (%)', 'Cohen\'s κ', 'Krippendorff\'s α', 'ICC']
+    colors = ['#2ecc71', '#f39c12', '#3498db', '#9b59b6', '#e74c3c']
+    width = 0.15
     
     for i, metric in enumerate(metrics):
         offset = width * i
-        if metric == 'Accuracy (%)':
-            values = comparison_df['Accuracy']
+        if metric == 'Primary Accuracy (%)':
+            values = comparison_df['Primary_Accuracy']
+        elif metric == 'Binary Accuracy (%)':
+            values = comparison_df['Binary_Accuracy']
         elif metric == 'Cohen\'s κ':
             values = comparison_df['Kappa'] * 100  # Scale for visibility
         elif metric == 'Krippendorff\'s α':
@@ -52,41 +54,41 @@ def create_comparison_visualization(comparison_df, output_dir):
         # Add value labels
         for bar in bars:
             height = bar.get_height()
-            if metric == 'Accuracy (%)':
+            if 'Accuracy' in metric:
                 ax1.text(bar.get_x() + bar.get_width()/2., height + 1,
-                        f'{height:.1f}', ha='center', va='bottom', fontsize=8)
+                        f'{height:.1f}', ha='center', va='bottom', fontsize=7)
             else:
                 ax1.text(bar.get_x() + bar.get_width()/2., height + 1,
-                        f'{height/100:.3f}', ha='center', va='bottom', fontsize=8)
+                        f'{height/100:.3f}', ha='center', va='bottom', fontsize=7)
     
     ax1.set_xlabel('Prompting Technique', fontsize=12, fontweight='bold')
     ax1.set_ylabel('Score (%)', fontsize=12, fontweight='bold')
-    ax1.set_title('Bloom Taxonomy Classification: 4 Metrics Comparison',
+    ax1.set_title('Bloom Taxonomy Binary Classification: Metrics Comparison',
                  fontsize=14, fontweight='bold', pad=20)
     ax1.set_ylim(0, 110)
-    ax1.set_xticks(x + width * 1.5)
+    ax1.set_xticks(x + width * 2)
     ax1.set_xticklabels(techniques, rotation=45, ha='right')
-    ax1.legend(loc='upper right')
+    ax1.legend(loc='upper right', fontsize=10)
     ax1.grid(True, axis='y', linestyle='--', alpha=0.3)
     
-    # Second subplot: Ranking by Cohen's Kappa
-    sorted_df = comparison_df.sort_values('Kappa', ascending=False)
+    # Second subplot: Ranking by Binary Accuracy
+    sorted_df = comparison_df.sort_values('Binary_Accuracy', ascending=False)
     y_pos = np.arange(len(sorted_df))
     
-    bars = ax2.barh(y_pos, sorted_df['Kappa'], alpha=0.8, 
+    bars = ax2.barh(y_pos, sorted_df['Binary_Accuracy'], alpha=0.8, 
                     color=['#2ecc71' if i == 0 else '#3498db' for i in range(len(sorted_df))])
     
     ax2.set_yticks(y_pos)
     ax2.set_yticklabels(sorted_df['Technique'])
-    ax2.set_xlabel('Cohen\'s Kappa (κ)', fontsize=12, fontweight='bold')
-    ax2.set_title('Techniques Ranked by Agreement (Cohen\'s κ)', fontsize=14, fontweight='bold', pad=20)
+    ax2.set_xlabel('Binary Accuracy (%)', fontsize=12, fontweight='bold')
+    ax2.set_title('Techniques Ranked by Binary Classification Accuracy', fontsize=14, fontweight='bold', pad=20)
     ax2.grid(True, axis='x', linestyle='--', alpha=0.3)
-    ax2.set_xlim(0, 1)
+    ax2.set_xlim(0, 100)
     
     # Add value labels
     for i, (idx, row) in enumerate(sorted_df.iterrows()):
-        kappa = row['Kappa']
-        ax2.text(kappa + 0.01, i, f'{kappa:.3f}', va='center', fontweight='bold')
+        binary_acc = row['Binary_Accuracy']
+        ax2.text(binary_acc + 1, i, f'{binary_acc:.1f}%', va='center', fontweight='bold')
     
     plt.tight_layout()
     plt.savefig(f"{output_dir}/bloom_all_techniques_comparison.png", 
@@ -94,11 +96,11 @@ def create_comparison_visualization(comparison_df, output_dir):
     plt.close()
 
 def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, techniques=None):
-    """Run Bloom taxonomy classification evaluations for all techniques."""
+    """Run Bloom taxonomy binary classification evaluations for all techniques."""
     
     # Create timestamped output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_dir = f"bloom_evaluation_all_techniques_{timestamp}"
+    base_dir = f"bloom_evaluation_binary_all_techniques_{timestamp}"
     output_path = os.path.join(output_dir, base_dir)
     
     # Handle existing directories
@@ -108,7 +110,7 @@ def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, 
         counter += 1
     
     os.makedirs(output_path, exist_ok=True)
-    print(f"\nBloom taxonomy evaluation results will be saved in: {output_path}")
+    print(f"\nBloom taxonomy binary evaluation results will be saved in: {output_path}")
     
     # Store results from each technique
     all_results = {}
@@ -131,7 +133,7 @@ def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, 
     # Process each technique
     for technique_name, evaluate_func in techniques.items():
         print(f"\n{'='*60}")
-        print(f"Running {technique_name} evaluation...")
+        print(f"Running {technique_name} evaluation (Binary Classification)...")
         print(f"{'='*60}")
         
         # Create technique-specific directory
@@ -159,12 +161,13 @@ def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, 
         print("No successful evaluations completed!")
         return None, None
     
-    # Create comparison DataFrame with the 4 metrics
+    # Create comparison DataFrame with both primary and binary accuracy
     comparison_data = []
     for technique_name, metrics in all_results.items():
         comparison_data.append({
             'Technique': technique_name,
-            'Accuracy': metrics.get('accuracy', 0),
+            'Primary_Accuracy': metrics.get('accuracy', 0),
+            'Binary_Accuracy': metrics.get('binary_accuracy', 0),
             'Kappa': metrics.get('kappa', 0),
             'Alpha': metrics.get('alpha', 0),
             'ICC': metrics.get('icc', 0)
@@ -185,35 +188,44 @@ def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, 
     
     # Generate comprehensive summary report
     with open(f"{output_path}/bloom_comprehensive_report.txt", 'w') as f:
-        f.write("=== Bloom Taxonomy Classification: Comprehensive Evaluation Report ===\n\n")
+        f.write("=== Bloom Taxonomy Binary Classification: Comprehensive Evaluation Report ===\n\n")
         
-        f.write("Dataset: Learning Outcomes with Bloom Taxonomy Classifications\n")
-        f.write("Task: Single-label classification of learning outcomes into 6 Bloom categories\n")
+        f.write("Dataset: Learning Outcomes with Binary Bloom Taxonomy Labels\n")
+        f.write("Task: Binary classification - AI predicts 1/0 for each of 6 Bloom categories\n")
+        f.write("Human Labels: Binary (1 if category applies, 0 if it doesn't)\n")
+        f.write("AI Predictions: Binary (1 if category applies, 0 if it doesn't)\n")
         f.write(f"Number of outcomes evaluated: {limit if limit else 'All available'}\n")
         f.write(f"Total techniques evaluated: {len(all_results)}\n\n")
         
         # Overall metrics comparison
         f.write("=== Overall Metrics Comparison ===\n")
         f.write("Metrics Used:\n")
-        f.write("- Accuracy: How often the model exactly matches human expert classifications\n")
+        f.write("- Primary Accuracy: How often AI picks same main category as humans\n")
+        f.write("- Binary Accuracy: How often AI matches humans on ALL 6 category decisions\n")
         f.write("- Cohen's Kappa (κ): Agreement beyond chance (-1 to 1, higher is better)\n")
         f.write("- Krippendorff's Alpha (α): Reliability measure (0 to 1, higher is better)\n")
         f.write("- ICC: Intraclass Correlation Coefficient (-1 to 1, higher is better)\n\n")
+        
+        f.write("Binary Classification Approach:\n")
+        f.write("- Humans: 1 if category applies, 0 if it doesn't (from CSV data)\n")
+        f.write("- AI: 1 if category applies, 0 if it doesn't (binary decisions)\n")
+        f.write("- Fair comparison: Binary-to-binary matching\n\n")
         
         f.write(comparison_df.to_string(index=False))
         f.write("\n\n")
         
         # Best performing technique for each metric
         f.write("=== Best Performing Techniques by Metric ===\n")
-        for metric in ['Accuracy', 'Kappa', 'Alpha', 'ICC']:
+        for metric in ['Primary_Accuracy', 'Binary_Accuracy', 'Kappa', 'Alpha', 'ICC']:
             best_technique = comparison_df.loc[comparison_df[metric].idxmax()]
             metric_name = {
-                'Accuracy': 'Accuracy',
+                'Primary_Accuracy': 'Primary Category Accuracy',
+                'Binary_Accuracy': 'Binary Classification Accuracy',
                 'Kappa': 'Cohen\'s Kappa (κ)',
                 'Alpha': 'Krippendorff\'s Alpha (α)',
                 'ICC': 'Intraclass Correlation (ICC)'
             }[metric]
-            if metric == 'Accuracy':
+            if 'Accuracy' in metric:
                 f.write(f"{metric_name}: {best_technique['Technique']} ({best_technique[metric]:.1f}%)\n")
             else:
                 f.write(f"{metric_name}: {best_technique['Technique']} ({best_technique[metric]:.3f})\n")
@@ -231,9 +243,20 @@ def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, 
         
         for category, description in category_descriptions.items():
             f.write(f"{category}: {description}\n")
+        
+        # Binary classification explanation
+        f.write("\n\n=== Binary Classification Approach ===\n\n")
+        f.write("Each technique generates these files:\n")
+        f.write("- detailed_results.csv: Results with both primary and binary accuracy\n")
+        f.write("- binary_predictions.csv: Full 1/0 decisions for all 6 categories\n")
+        f.write("- metrics_summary.csv: Both primary and binary accuracy metrics\n\n")
+        f.write("This approach provides fair comparison by matching:\n")
+        f.write("- Human binary labels (1/0 from CSV) vs AI binary decisions (1/0)\n")
+        f.write("- Category-by-category accuracy measurement\n")
+        f.write("- Both individual category and overall classification performance\n")
     
     print(f"\n{'='*70}")
-    print("BLOOM TAXONOMY COMPREHENSIVE EVALUATION COMPLETE")
+    print("BLOOM TAXONOMY BINARY CLASSIFICATION EVALUATION COMPLETE")
     print(f"{'='*70}")
     print(f"Results saved in: {output_path}")
     print("\nGenerated files:")
@@ -242,20 +265,25 @@ def run_bloom_evaluations(data_path, api_key, output_dir="results", limit=None, 
     print("- bloom_all_detailed_results.csv (All detailed predictions)")
     print("- bloom_comprehensive_report.txt (Complete analysis report)")
     print("- Individual technique results in subdirectories")
+    print("\nNOTE: Each technique now provides binary decisions (1/0) matching human labels!")
+    print("      Binary accuracy shows category-by-category agreement.")
     
     return comparison_df, detailed_results
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("Bloom Taxonomy Classification: Comprehensive Evaluation Suite")
+    print("Bloom Taxonomy Binary Classification: Comprehensive Evaluation Suite")
     print("=" * 70)
     print(f"Using Bloom taxonomy dataset: {config.DATA_PATH}")
     
     # Ask user for evaluation parameters
     print("\nEvaluation Options:")
-    print("This will evaluate different prompting strategies on the Bloom taxonomy dataset.")
+    print("This will evaluate different prompting strategies using BINARY classification.")
+    print("Human experts provide binary labels (1/0) for each category.")
+    print("AI will provide binary decisions (1/0) for fair comparison.")
     print("\nMetrics to be calculated:")
-    print("- Accuracy: Exact match between model and human expert classifications")
+    print("- Primary Accuracy: AI picks same main category as humans")
+    print("- Binary Accuracy: AI matches humans on ALL 6 category decisions")
     print("- Cohen's Kappa (κ): Agreement beyond chance")
     print("- Krippendorff's Alpha (α): Reliability measure")
     print("- Intraclass Correlation (ICC): Score correlation")
@@ -274,7 +302,7 @@ if __name__ == "__main__":
         limit = None
     
     # Ask which techniques to evaluate
-    print("\nAvailable prompting techniques:")
+    print("\nAvailable prompting techniques (all use binary classification):")
     all_techniques = [
         "1. Zero-shot",
         "2. Chain of Thought", 
@@ -322,8 +350,9 @@ if __name__ == "__main__":
     
     # Run evaluations
     try:
-        print("\nStarting comprehensive Bloom taxonomy evaluation...")
+        print("\nStarting comprehensive Bloom taxonomy binary classification evaluation...")
         print("This may take some time depending on the number of outcomes and techniques selected.")
+        print("AI will make binary decisions (1/0) for each category to match human labels!")
         
         comparison_df, detailed_results = run_bloom_evaluations(
             data_path=config.DATA_PATH,
@@ -334,10 +363,10 @@ if __name__ == "__main__":
         
         if comparison_df is not None:
             print("\nAll evaluations completed successfully!")
-            print("\nTop techniques by Cohen's Kappa:")
-            top_techniques = comparison_df.nlargest(3, 'Kappa')
+            print("\nTop techniques by Binary Accuracy:")
+            top_techniques = comparison_df.nlargest(3, 'Binary_Accuracy')
             for rank, (idx, row) in enumerate(top_techniques.iterrows(), 1):
-                print(f"{rank}. {row['Technique']}: κ={row['Kappa']:.3f}")
+                print(f"{rank}. {row['Technique']}: {row['Binary_Accuracy']:.1f}%")
         else:
             print("\nNo evaluations completed successfully.")
             
