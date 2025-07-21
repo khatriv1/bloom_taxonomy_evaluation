@@ -1,632 +1,555 @@
 # bloom_taxonomy_evaluation/prompting/active_prompt.py
-
-"""
-Active prompting for Bloom taxonomy classification.
-Binary version: Iteratively selects informative examples for binary classification.
-"""
+# FIXED: Added Self-Consistency to final predictions
 
 import time
 import json
 import re
 import numpy as np
 from typing import List, Optional, Dict, Tuple
+from collections import Counter
+import pandas as pd
 from utils.bloom_rubric import BloomRubric
 
 class ActivePromptSelector:
-    """Selects most informative examples for active learning."""
+    """Implements Active Prompting methodology with ROBUST column handling"""
     
-    def __init__(self):
-        self.example_pool = self._initialize_example_pool()
-        self.selected_examples = {category: [] for category in self.example_pool.keys()}
+    def __init__(self, pool_size: int = 20, k_samples: int = 2, consistency_samples: int = 5):
+        self.pool_size = pool_size
+        self.k_samples = k_samples
+        self.consistency_samples = consistency_samples  # NEW: For self-consistency
+        self.uncertainty_scores = {}
+        
+    def estimate_uncertainty(self, questions: List[str], client, category: str) -> Dict[str, float]:
+        """Estimate uncertainty with MUCH BETTER prompts (unchanged)"""
+        print(f"Estimating uncertainty for {len(questions)} questions in category: {category}")
+        
+        uncertainty_scores = {}
+        
+        for i, question in enumerate(questions):
+            if (i + 1) % 5 == 0:
+                print(f"Processing question {i + 1}/{len(questions)}")
+            
+            predictions = []
+            for sample_idx in range(self.k_samples):
+                pred = self._get_single_prediction(question, client, category)
+                if pred is not None:
+                    predictions.append(pred)
+                time.sleep(0.05)
+            
+            if predictions:
+                unique_predictions = len(set(predictions))
+                disagreement = unique_predictions / len(predictions)
+                uncertainty_scores[question] = disagreement
+            else:
+                uncertainty_scores[question] = 0.0
+        
+        return uncertainty_scores
     
-    def _initialize_example_pool(self) -> Dict[str, List[Tuple[str, Dict[str, int]]]]:
-        """Initialize pool of examples for active selection with binary labels."""
-        return {
-            'remember': [
-                ("Students will recall the names of all 50 US states", {"remember": 1, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}),
-                ("Students will list the major battles of World War II", {"remember": 1, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}),
-                ("Students will identify the parts of a microscope", {"remember": 1, "understand": 0, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}),
-            ],
-            'understand': [
-                ("Students will explain the water cycle process", {"remember": 0, "understand": 1, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}),
-                ("Students will describe the main themes in literature", {"remember": 0, "understand": 1, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}),
-                ("Students will interpret data from graphs", {"remember": 0, "understand": 1, "apply": 0, "analyze": 0, "evaluate": 0, "create": 0}),
-            ],
-            'apply': [
-                ("Students will solve quadratic equations using formulas", {"remember": 0, "understand": 0, "apply": 1, "analyze": 0, "evaluate": 0, "create": 0}),
-                ("Students will demonstrate proper laboratory procedures", {"remember": 0, "understand": 0, "apply": 1, "analyze": 0, "evaluate": 0, "create": 0}),
-                ("Students will use statistical software to analyze data", {"remember": 0, "understand": 0, "apply": 1, "analyze": 0, "evaluate": 0, "create": 0}),
-            ]
+    def _get_single_prediction(self, learning_outcome: str, client, category: str) -> Optional[int]:
+        """Get a single binary prediction with MUCH BETTER prompts (unchanged)"""
+        
+        try:
+            category_prompts = {
+                'remember': {
+                    'description': 'recalling facts, terms, basic concepts, or procedures',
+                    'keywords': 'list, identify, name, recall, state, define, describe facts',
+                    'example_yes': 'List the steps of mitosis',
+                    'example_no': 'Analyze the effectiveness of mitosis in cell division'
+                },
+                'understand': {
+                    'description': 'explaining ideas, interpreting, or summarizing concepts',
+                    'keywords': 'explain, describe, interpret, summarize, discuss, outline',
+                    'example_yes': 'Explain how photosynthesis works',
+                    'example_no': 'List the steps of photosynthesis'
+                },
+                'apply': {
+                    'description': 'using information in new situations or implementing procedures',
+                    'keywords': 'use, apply, solve, demonstrate, implement, calculate',
+                    'example_yes': 'Use the quadratic formula to solve equations',
+                    'example_no': 'Explain what the quadratic formula is'
+                },
+                'analyze': {
+                    'description': 'breaking down information, comparing, or examining relationships',
+                    'keywords': 'analyze, compare, examine, break down, investigate, differentiate',
+                    'example_yes': 'Compare different economic theories',
+                    'example_no': 'Use economic theories to solve problems'
+                },
+                'evaluate': {
+                    'description': 'making judgments, critiquing, or assessing value',
+                    'keywords': 'evaluate, assess, judge, critique, justify, argue',
+                    'example_yes': 'Evaluate the effectiveness of different teaching methods',
+                    'example_no': 'Compare different teaching methods'
+                },
+                'create': {
+                    'description': 'putting elements together to form something new or original',
+                    'keywords': 'create, design, develop, construct, generate, produce',
+                    'example_yes': 'Design a new experiment to test the hypothesis',
+                    'example_no': 'Evaluate the effectiveness of the experiment'
+                }
+            }
+            
+            cat_info = category_prompts[category]
+            
+            prompt = f"""Does this learning outcome require {category.upper()} level thinking?
+
+{category.upper()} means: {cat_info['description']}
+
+Key indicators: {cat_info['keywords']}
+
+Examples:
+✅ YES - {category.upper()}: "{cat_info['example_yes']}"
+❌ NO - NOT {category.upper()}: "{cat_info['example_no']}"
+
+Learning Outcome: "{learning_outcome[:200]}"
+
+Look for the action verbs and cognitive demands. Does this require students to {cat_info['description']}?
+
+Answer "1" if YES (this requires {category} thinking)
+Answer "0" if NO (this does NOT require {category} thinking)
+
+Answer:"""
+
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo-0125",
+                messages=[
+                    {"role": "system", "content": f"You are an expert in Bloom's Taxonomy. Carefully analyze if learning outcomes require {category} level thinking. Look at the action verbs and cognitive demands. Answer only 1 or 0."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.8,
+                max_tokens=5,
+                timeout=12
+            )
+            
+            result = response.choices[0].message.content.strip()
+            if result in ["1", "0"]:
+                return int(result)
+            
+        except Exception as e:
+            pass
+            
+        return None
+    
+    def select_uncertain_questions(self, uncertainty_scores: Dict[str, float], n_select: int = 2) -> List[str]:
+        """Select the most uncertain questions"""
+        sorted_questions = sorted(uncertainty_scores.items(), key=lambda x: x[1], reverse=True)
+        selected = [q for q, score in sorted_questions[:n_select]]
+        
+        print(f"Selected {len(selected)} most uncertain questions:")
+        for i, q in enumerate(selected):
+            score = uncertainty_scores[q]
+            print(f"  {i+1}. (uncertainty: {score:.3f}) {q[:60]}...")
+        
+        return selected
+
+def find_learning_outcome_column(df: pd.DataFrame) -> str:
+    """Robust column detection with detailed logging (unchanged)"""
+    
+    print(f"🔍 COLUMN DETECTION PROCESS:")
+    print(f"Available columns: {list(df.columns)}")
+    
+    strategies = [
+        ("Exact match", lambda df: _exact_match(df)),
+        ("Partial match", lambda df: _partial_match(df)),
+        ("Longest text", lambda df: _longest_text(df)),
+        ("First text column", lambda df: _first_text_column(df))
+    ]
+    
+    for strategy_name, strategy_func in strategies:
+        try:
+            result = strategy_func(df)
+            if result:
+                print(f"✅ {strategy_name} found: '{result}'")
+                return result
+            else:
+                print(f"❌ {strategy_name} failed")
+        except Exception as e:
+            print(f"❌ {strategy_name} error: {e}")
+    
+    first_col = df.columns[0]
+    print(f"⚠️ Using first column as fallback: '{first_col}'")
+    return first_col
+
+def _exact_match(df: pd.DataFrame) -> Optional[str]:
+    """Strategy 1: Exact name matching"""
+    possible_names = [
+        'Learning_outcome', 'learning_outcome', 'outcome', 'Outcome',
+        'text', 'Text', 'learning_objectives', 'objective',
+        'description', 'Description', 'statement', 'Statement',
+        'content', 'Content', 'learning_goal', 'goal'
+    ]
+    
+    for col in df.columns:
+        if col in possible_names:
+            return col
+    return None
+
+def _partial_match(df: pd.DataFrame) -> Optional[str]:
+    """Strategy 2: Partial name matching"""
+    keywords = ['learning', 'outcome', 'objective', 'goal', 'description', 'statement']
+    
+    for col in df.columns:
+        col_lower = col.lower()
+        if any(keyword in col_lower for keyword in keywords):
+            return col
+    return None
+
+def _longest_text(df: pd.DataFrame) -> Optional[str]:
+    """Strategy 3: Find column with longest text"""
+    text_cols = []
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            try:
+                avg_length = df[col].dropna().str.len().mean()
+                if avg_length > 20:
+                    text_cols.append((col, avg_length))
+            except:
+                continue
+    
+    if text_cols:
+        return max(text_cols, key=lambda x: x[1])[0]
+    return None
+
+def _first_text_column(df: pd.DataFrame) -> Optional[str]:
+    """Strategy 4: First text column"""
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            return col
+    return None
+
+def get_active_prompt_prediction_binary_class(learning_outcome: str, client, uncertainty_data: Dict = None,
+                                            use_self_consistency: bool = True,
+                                            consistency_samples: int = 5) -> Dict[str, int]:
+    """Get active prompting binary prediction with SELF-CONSISTENCY"""
+    categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
+    results = {}
+    
+    for category in categories:
+        # Get examples with CoT reasoning
+        examples_text = ""
+        if uncertainty_data and category in uncertainty_data:
+            examples = uncertainty_data[category][:1]
+            if examples:
+                ex_outcome, ex_reasoning = examples[0]
+                # Create detailed CoT reasoning
+                detailed_reasoning = create_cot_reasoning_bloom(ex_outcome, category, ex_reasoning)
+                examples_text = f"\nUncertain Example:\n"
+                examples_text += f'Learning Outcome: "{ex_outcome[:80]}..."\n'
+                examples_text += f'Reasoning: {detailed_reasoning}\n\n'
+        
+        category_prompts = {
+            'remember': {
+                'description': 'recalling facts, terms, basic concepts, or procedures',
+                'keywords': 'list, identify, name, recall, state, define',
+                'focus': 'retrieving factual information from memory'
+            },
+            'understand': {
+                'description': 'explaining ideas, interpreting, or summarizing concepts',
+                'keywords': 'explain, describe, interpret, summarize, discuss',
+                'focus': 'demonstrating comprehension of meaning'
+            },
+            'apply': {
+                'description': 'using information in new situations or implementing procedures',
+                'keywords': 'use, apply, solve, demonstrate, implement, calculate',
+                'focus': 'applying knowledge to solve problems'
+            },
+            'analyze': {
+                'description': 'breaking down information, comparing, or examining relationships',
+                'keywords': 'analyze, compare, examine, break down, investigate',
+                'focus': 'examining parts and relationships'
+            },
+            'evaluate': {
+                'description': 'making judgments, critiquing, or assessing value',
+                'keywords': 'evaluate, assess, judge, critique, justify',
+                'focus': 'making informed judgments based on criteria'
+            },
+            'create': {
+                'description': 'putting elements together to form something new or original',
+                'keywords': 'create, design, develop, construct, generate',
+                'focus': 'combining elements into coherent wholes'
+            }
         }
-    
-    def select_examples(self, category: str, n_examples: int = 3) -> List[Tuple[str, Dict[str, int]]]:
-        """Select most informative examples."""
-        available_examples = self.example_pool.get(category, [])
-        return available_examples[:n_examples]
+        
+        cat_info = category_prompts[category]
+        
+        prompt = f"""Analyze this learning outcome for {category.upper()} level thinking in Bloom's Taxonomy.
 
-def get_active_prompt_prediction_binary_class(learning_outcome: str, client) -> Dict[str, int]:
-    """
-    Get active prompting binary prediction for all 6 Bloom categories.
-    
-    Args:
-        learning_outcome: The learning outcome text
-        client: OpenAI client
-    
-    Returns:
-        Dictionary with 1/0 decisions for all 6 categories
-    """
-    categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
-    
-    rubric = BloomRubric()
-    category_definitions = rubric.get_category_definitions()
-    selector = ActivePromptSelector()
-    
-    # Get actively selected examples for key categories
-    examples_text = ""
-    for cat in ['remember', 'understand', 'apply']:  # Limit to avoid token issues
-        selected_examples = selector.select_examples(cat, n_examples=2)
-        examples_text += f"\n{cat.upper()} examples:\n"
-        for ex_outcome, ex_binary in selected_examples:
-            examples_text += f"- \"{ex_outcome}\" → {ex_binary}\n"
-    
-    definitions_text = ""
-    for cat in categories:
-        definitions_text += f"{cat.upper()}: {category_definitions[cat]['description']}\n"
+{category.upper()}: {cat_info['description']}
+Key indicators: {cat_info['keywords']}
+Focus: Students will be {cat_info['focus']}
 
-    prompt = f"""You are an expert educator classifying learning outcomes according to Bloom's Taxonomy.
-
-BLOOM'S TAXONOMY CATEGORIES:
-{definitions_text}
-
-CAREFULLY SELECTED EXAMPLES:
 {examples_text}
+LEARNING OUTCOME TO ANALYZE:
+"{learning_outcome[:200]}"
 
-TASK: Using the examples above, analyze this learning outcome and decide which Bloom taxonomy categories apply. For each category, respond with 1 if it applies or 0 if it doesn't apply.
+STEP-BY-STEP ANALYSIS:
+1. What are the action verbs? (look for: {cat_info['keywords']})
+2. What cognitive level is required? 
+3. Does this require {cat_info['focus']}?
 
-Learning Outcome: "{learning_outcome}"
+Answer "1" if this requires {category.upper()} thinking
+Answer "0" if this does NOT require {category.upper()} thinking
 
-INSTRUCTIONS:
-1. Learn from the selected examples provided
-2. Identify the cognitive demands required
-3. For each category, decide if it applies (1) or doesn't apply (0)
-4. Multiple categories can be 1 if the outcome involves multiple types of thinking
-5. Respond in this exact JSON format:
+Answer:"""
 
-{{
-    "remember": 0,
-    "understand": 0,
-    "apply": 0,
-    "analyze": 0,
-    "evaluate": 0,
-    "create": 0
-}}
-
-Classification:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at classifying learning outcomes using Bloom's Taxonomy. Learn from examples and provide JSON binary decisions."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=200
-        )
+        if not use_self_consistency:
+            # Single prediction (original method)
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo-0125",
+                    messages=[
+                        {"role": "system", "content": f"You are an expert in Bloom's Taxonomy. Analyze learning outcomes carefully for {category} level thinking. Look at action verbs and cognitive demands. Answer only 1 or 0."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=5,
+                    timeout=15
+                )
+                
+                result = response.choices[0].message.content.strip()
+                results[category] = 1 if result == "1" else 0
+                        
+            except Exception as e:
+                print(f"Error in {category}: {e}")
+                results[category] = 0
         
-        result = response.choices[0].message.content.strip()
+        else:
+            # NEW: SELF-CONSISTENCY - Multiple predictions + most common answer
+            predictions = []
+            
+            for i in range(consistency_samples):
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo-0125",
+                        messages=[
+                            {"role": "system", "content": f"You are an expert in Bloom's Taxonomy. Analyze learning outcomes carefully for {category} level thinking. Look at action verbs and cognitive demands. Answer only 1 or 0."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.7,  # Higher temperature for diversity
+                        max_tokens=5,
+                        timeout=15
+                    )
+                    
+                    result = response.choices[0].message.content.strip()
+                    if result == "1":
+                        predictions.append(1)
+                    elif result == "0":
+                        predictions.append(0)
+                    
+                    time.sleep(0.1)
+                    
+                except Exception as e:
+                    print(f"Error in {category} sample {i+1}: {e}")
+                    continue
+            
+            if predictions:
+                # Take most common answer (SELF-CONSISTENCY)
+                counter = Counter(predictions)
+                most_common_answer = counter.most_common(1)[0][0]
+                results[category] = most_common_answer
+                print(f"Self-consistency for {category}: {predictions} → {most_common_answer}")
+            else:
+                results[category] = 0
         
-        # Extract JSON from response
-        binary_decisions = parse_binary_decisions(result, categories)
-        
-        return binary_decisions
-        
-    except Exception as e:
-        print(f"Error in active prompting binary classification: {str(e)}")
-        return {cat: 0 for cat in categories}
-
-def get_active_prompt_prediction_single_category(learning_outcome: str, client) -> str:
-    """Get single best category using active prompting binary decisions."""
-    binary_decisions = get_active_prompt_prediction_binary_class(learning_outcome, client)
+        time.sleep(0.1)
     
-    selected_categories = [cat for cat, decision in binary_decisions.items() if decision == 1]
+    return results
+
+def get_active_prompt_prediction_single_category(learning_outcome: str, client, uncertainty_data: Dict = None,
+                                               use_self_consistency: bool = True,
+                                               consistency_samples: int = 5) -> str:
+    """Get single best category with SELF-CONSISTENCY"""
+    binary_decisions = get_active_prompt_prediction_binary_class(learning_outcome, client, uncertainty_data,
+                                                               use_self_consistency, consistency_samples)
+    
+    # IMPROVED CATEGORY SELECTION LOGIC
+    category_priority = ['create', 'evaluate', 'analyze', 'apply', 'understand', 'remember']
+    
+    selected_categories = [cat for cat in category_priority if binary_decisions.get(cat, 0) == 1]
     
     if selected_categories:
         return selected_categories[0]
     else:
         return 'understand'
 
-def parse_binary_decisions(response_text: str, categories: list) -> Dict[str, int]:
-    """Parse binary decisions from model response."""
-    decisions = {}
+def prepare_active_prompting_data(df: pd.DataFrame, client, n_examples: int = 2) -> Dict[str, List[Tuple[str, str]]]:
+    """Prepare active prompting examples with COMPLETE column fix (unchanged)"""
+    print("Preparing Active Prompting data (COMPLETELY FIXED VERSION)...")
     
-    try:
-        json_match = re.search(r'\{[^}]+\}', response_text)
-        if json_match:
-            json_str = json_match.group()
-            parsed = json.loads(json_str)
-            
-            for cat in categories:
-                value = parsed.get(cat, 0)
-                decisions[cat] = 1 if value == 1 else 0
-        else:
-            for cat in categories:
-                pattern = rf'"{cat}"\s*:\s*([01])'
-                match = re.search(pattern, response_text)
-                if match:
-                    decisions[cat] = int(match.group(1))
-                else:
-                    decisions[cat] = 0
-                    
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Error parsing binary decisions: {e}")
-        decisions = {cat: 0 for cat in categories}
-    
-    return decisions
-
-# Alias for backward compatibility
-def get_active_prompt_prediction_multi_class(learning_outcome: str, client) -> Dict[str, int]:
-    """Alias for binary classification to maintain compatibility."""
-    return get_active_prompt_prediction_binary_class(learning_outcome, client)
-
-# =====================================
-# bloom_taxonomy_evaluation/prompting/contrastive_cot.py
-
-"""
-Contrastive Chain of Thought prompting for Bloom taxonomy classification.
-Binary version: Uses both positive and negative reasoning for binary decisions.
-"""
-
-import time
-import json
-import re
-from typing import List, Optional, Dict
-from utils.bloom_rubric import BloomRubric
-
-def get_contrastive_cot_prediction_binary_class(learning_outcome: str, client) -> Dict[str, int]:
-    """
-    Get Contrastive Chain of Thought binary prediction for all 6 Bloom categories.
-    
-    Args:
-        learning_outcome: The learning outcome text
-        client: OpenAI client
-    
-    Returns:
-        Dictionary with 1/0 decisions for all 6 categories
-    """
     categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
-    
-    rubric = BloomRubric()
-    category_definitions = rubric.get_category_definitions()
-    
-    definitions_text = ""
-    for cat in categories:
-        definitions_text += f"{cat.upper()}: {category_definitions[cat]['description']}\n"
-
-    prompt = f"""You are an expert educator classifying learning outcomes according to Bloom's Taxonomy.
-
-BLOOM'S TAXONOMY CATEGORIES:
-{definitions_text}
-
-Now classify this learning outcome using both positive and negative reasoning:
-
-Learning Outcome: "{learning_outcome}"
-
-INSTRUCTIONS:
-1. For each category, consider why it MIGHT apply (positive reasoning)
-2. For each category, consider why it might NOT apply (negative reasoning)
-3. Based on both reasonings, make binary decisions (1 if applies, 0 if doesn't)
-4. Multiple categories can be 1 if the outcome involves multiple types of thinking
-
-Provide your analysis and final binary decisions in this JSON format:
-
-{{
-    "remember": 0,
-    "understand": 0,
-    "apply": 0,
-    "analyze": 0,
-    "evaluate": 0,
-    "create": 0
-}}
-
-Analysis and Classification:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at classifying learning outcomes using Bloom's Taxonomy. Use contrastive reasoning and provide JSON binary decisions."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=500
-        )
-        
-        result = response.choices[0].message.content.strip()
-        
-        # Extract JSON from response
-        binary_decisions = parse_binary_decisions(result, categories)
-        
-        return binary_decisions
-        
-    except Exception as e:
-        print(f"Error in contrastive CoT binary classification: {str(e)}")
-        return {cat: 0 for cat in categories}
-
-def get_contrastive_cot_prediction_single_category(learning_outcome: str, client) -> str:
-    """Get single best category using contrastive reasoning."""
-    binary_decisions = get_contrastive_cot_prediction_binary_class(learning_outcome, client)
-    
-    selected_categories = [cat for cat, decision in binary_decisions.items() if decision == 1]
-    
-    if selected_categories:
-        return selected_categories[0]
-    else:
-        return 'understand'
-
-def parse_binary_decisions(response_text: str, categories: list) -> Dict[str, int]:
-    """Parse binary decisions from model response."""
-    decisions = {}
+    active_examples = {}
     
     try:
-        json_match = re.search(r'\{[^}]+\}', response_text)
-        if json_match:
-            json_str = json_match.group()
-            parsed = json.loads(json_str)
+        outcome_col = find_learning_outcome_column(df)
+        print(f"✓ Successfully identified outcome column: '{outcome_col}'")
+    except ValueError as e:
+        print(f"❌ Column detection failed: {e}")
+        return {cat: [] for cat in categories}
+    
+    max_samples = min(len(df), 10)
+    sample_df = df.sample(n=max_samples, random_state=42)
+    sample_questions = sample_df[outcome_col].tolist()
+    
+    selector = ActivePromptSelector(k_samples=2)
+    
+    for category in categories:
+        print(f"\nProcessing category: {category}")
+        
+        try:
+            uncertainty_scores = selector.estimate_uncertainty(sample_questions, client, category)
             
-            for cat in categories:
-                value = parsed.get(cat, 0)
-                decisions[cat] = 1 if value == 1 else 0
-        else:
-            for cat in categories:
-                pattern = rf'"{cat}"\s*:\s*([01])'
-                match = re.search(pattern, response_text)
-                if match:
-                    decisions[cat] = int(match.group(1))
-                else:
-                    decisions[cat] = 0
-                    
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Error parsing binary decisions: {e}")
-        decisions = {cat: 0 for cat in categories}
-    
-    return decisions
-
-# Alias for backward compatibility
-def get_contrastive_cot_prediction_multi_class(learning_outcome: str, client) -> Dict[str, int]:
-    """Alias for binary classification to maintain compatibility."""
-    return get_contrastive_cot_prediction_binary_class(learning_outcome, client)
-
-# =====================================
-# bloom_taxonomy_evaluation/prompting/take_a_step_back.py
-
-"""
-Take a Step Back prompting for Bloom taxonomy classification.
-Binary version: Derives principles then applies for binary decisions.
-"""
-
-import time
-import json
-import re
-from typing import List, Optional, Dict
-from utils.bloom_rubric import BloomRubric
-
-def derive_classification_principles(client) -> Optional[str]:
-    """Derive high-level principles for Bloom taxonomy classification."""
-    
-    prompt = f"""Take a step back and think about the fundamental principles for classifying learning outcomes according to Bloom's Taxonomy with binary decisions.
-
-What are the key characteristics, patterns, and principles that help determine which of the 6 Bloom taxonomy levels apply to a learning outcome?
-
-Consider:
-1. What types of action verbs typically indicate each level?
-2. How does cognitive complexity increase from Remember to Create?
-3. How can you tell when multiple categories apply to one outcome?
-4. What are common misconceptions when classifying learning outcomes?
-
-List 5-7 high-level principles for binary Bloom taxonomy classification:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at analyzing patterns in educational learning outcomes. Derive clear principles for binary Bloom taxonomy classification."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=300
-        )
-        
-        return response.choices[0].message.content.strip()
-        
-    except Exception as e:
-        print(f"Error deriving principles: {str(e)}")
-        return None
-
-def get_take_step_back_prediction_binary_class(learning_outcome: str, client) -> Dict[str, int]:
-    """
-    Get Take a Step Back binary prediction for all 6 Bloom categories.
-    
-    Args:
-        learning_outcome: The learning outcome text
-        client: OpenAI client
-    
-    Returns:
-        Dictionary with 1/0 decisions for all 6 categories
-    """
-    categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
-    
-    rubric = BloomRubric()
-    category_definitions = rubric.get_category_definitions()
-    
-    # Step 1: Derive high-level principles
-    principles = derive_classification_principles(client)
-    if principles is None:
-        principles = "Consider the action verbs and cognitive complexity required by the learning outcome."
-    
-    definitions_text = ""
-    for cat in categories:
-        definitions_text += f"{cat.upper()}: {category_definitions[cat]['description']}\n"
-
-    # Step 2: Apply principles to make binary decisions
-    prompt = f"""You are an expert educator classifying learning outcomes according to Bloom's Taxonomy.
-
-BLOOM'S TAXONOMY CATEGORIES:
-{definitions_text}
-
-HIGH-LEVEL PRINCIPLES FOR BLOOM CLASSIFICATION:
-{principles}
-
-TASK: Apply these principles to make binary decisions for this learning outcome.
-
-Learning Outcome: "{learning_outcome}"
-
-INSTRUCTIONS:
-1. Apply the general principles above to this specific case
-2. Consider which categories apply to this outcome
-3. Make binary decisions (1 if applies, 0 if doesn't) for each category
-4. Multiple categories can be 1 if the outcome involves multiple types of thinking
-5. Respond in this exact JSON format:
-
-{{
-    "remember": 0,
-    "understand": 0,
-    "apply": 0,
-    "analyze": 0,
-    "evaluate": 0,
-    "create": 0
-}}
-
-Classification:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at classifying learning outcomes using Bloom's Taxonomy. Apply the given principles and provide JSON binary decisions."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=250
-        )
-        
-        result = response.choices[0].message.content.strip()
-        
-        # Extract JSON from response
-        binary_decisions = parse_binary_decisions(result, categories)
-        
-        return binary_decisions
-        
-    except Exception as e:
-        print(f"Error in take-step-back binary classification: {str(e)}")
-        return {cat: 0 for cat in categories}
-
-def get_take_step_back_prediction_single_category(learning_outcome: str, client) -> str:
-    """Get single best category using step-back reasoning."""
-    binary_decisions = get_take_step_back_prediction_binary_class(learning_outcome, client)
-    
-    selected_categories = [cat for cat, decision in binary_decisions.items() if decision == 1]
-    
-    if selected_categories:
-        return selected_categories[0]
-    else:
-        return 'understand'
-
-def parse_binary_decisions(response_text: str, categories: list) -> Dict[str, int]:
-    """Parse binary decisions from model response."""
-    decisions = {}
-    
-    try:
-        json_match = re.search(r'\{[^}]+\}', response_text)
-        if json_match:
-            json_str = json_match.group()
-            parsed = json.loads(json_str)
+            if not uncertainty_scores:
+                raise Exception("No uncertainty scores")
             
-            for cat in categories:
-                value = parsed.get(cat, 0)
-                decisions[cat] = 1 if value == 1 else 0
-        else:
-            for cat in categories:
-                pattern = rf'"{cat}"\s*:\s*([01])'
-                match = re.search(pattern, response_text)
-                if match:
-                    decisions[cat] = int(match.group(1))
-                else:
-                    decisions[cat] = 0
-                    
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Error parsing binary decisions: {e}")
-        decisions = {cat: 0 for cat in categories}
-    
-    return decisions
-
-# Alias for backward compatibility
-def get_take_step_back_prediction_multi_class(learning_outcome: str, client) -> Dict[str, int]:
-    """Alias for binary classification to maintain compatibility."""
-    return get_take_step_back_prediction_binary_class(learning_outcome, client)
-
-# =====================================
-# bloom_taxonomy_evaluation/prompting/rephrase_and_respond.py
-
-"""
-Rephrase and Respond prompting for Bloom taxonomy classification.
-Binary version: Rephrases outcome then provides binary decisions.
-"""
-
-import time
-import json
-import re
-from typing import List, Optional, Tuple, Dict
-from utils.bloom_rubric import BloomRubric
-
-def rephrase_learning_outcome(learning_outcome: str, client) -> Optional[str]:
-    """Rephrase the learning outcome to clarify its cognitive demands."""
-    
-    prompt = f"""Rephrase the following learning outcome to make its cognitive demands and intent clearer, while preserving all important information:
-
-Original learning outcome: "{learning_outcome}"
-
-Instructions:
-1. Make the action verbs more explicit
-2. Clarify what cognitive processes students need to use
-3. Preserve the original meaning and scope
-4. Make it easier to understand what students will actually do
-
-Rephrased learning outcome:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at clarifying educational learning outcomes. Rephrase to make cognitive demands clear while preserving all information."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=150
-        )
-        
-        return response.choices[0].message.content.strip()
-        
-    except Exception as e:
-        print(f"Error rephrasing learning outcome: {str(e)}")
-        return None
-
-def get_rephrase_respond_prediction_binary_class(learning_outcome: str, client) -> Dict[str, int]:
-    """
-    Get Rephrase and Respond binary prediction for all 6 Bloom categories.
-    
-    Args:
-        learning_outcome: The learning outcome text
-        client: OpenAI client
-    
-    Returns:
-        Dictionary with 1/0 decisions for all 6 categories
-    """
-    categories = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
-    
-    rubric = BloomRubric()
-    category_definitions = rubric.get_category_definitions()
-    
-    # Step 1: Rephrase the learning outcome
-    rephrased = rephrase_learning_outcome(learning_outcome, client)
-    if rephrased is None:
-        rephrased = learning_outcome
-    
-    definitions_text = ""
-    for cat in categories:
-        definitions_text += f"{cat.upper()}: {category_definitions[cat]['description']}\n"
-
-    # Step 2: Make binary decisions based on both versions
-    prompt = f"""You are an expert educator classifying learning outcomes according to Bloom's Taxonomy.
-
-BLOOM'S TAXONOMY CATEGORIES:
-{definitions_text}
-
-TASK: Analyze both versions of this learning outcome and decide which Bloom taxonomy categories apply. For each category, respond with 1 if it applies or 0 if it doesn't apply.
-
-Original learning outcome: "{learning_outcome}"
-Rephrased for clarity: "{rephrased}"
-
-INSTRUCTIONS:
-1. Consider both the original and rephrased versions
-2. Identify the cognitive demands required
-3. For each category, decide if it applies (1) or doesn't apply (0)
-4. Multiple categories can be 1 if the outcome involves multiple types of thinking
-5. Respond in this exact JSON format:
-
-{{
-    "remember": 0,
-    "understand": 0,
-    "apply": 0,
-    "analyze": 0,
-    "evaluate": 0,
-    "create": 0
-}}
-
-Classification:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            messages=[
-                {"role": "system", "content": "You are an expert at classifying learning outcomes using Bloom's Taxonomy. Consider both versions and provide JSON binary decisions."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=250
-        )
-        
-        result = response.choices[0].message.content.strip()
-        
-        # Extract JSON from response
-        binary_decisions = parse_binary_decisions(result, categories)
-        
-        return binary_decisions
-        
-    except Exception as e:
-        print(f"Error in rephrase-respond binary classification: {str(e)}")
-        return {cat: 0 for cat in categories}
-
-def get_rephrase_respond_prediction_single_category(learning_outcome: str, client) -> str:
-    """Get single best category using rephrase-respond approach."""
-    binary_decisions = get_rephrase_respond_prediction_binary_class(learning_outcome, client)
-    
-    selected_categories = [cat for cat, decision in binary_decisions.items() if decision == 1]
-    
-    if selected_categories:
-        return selected_categories[0]
-    else:
-        return 'understand'
-
-def parse_binary_decisions(response_text: str, categories: list) -> Dict[str, int]:
-    """Parse binary decisions from model response."""
-    decisions = {}
-    
-    try:
-        json_match = re.search(r'\{[^}]+\}', response_text)
-        if json_match:
-            json_str = json_match.group()
-            parsed = json.loads(json_str)
+            selected_questions = selector.select_uncertain_questions(uncertainty_scores, n_examples)
+            examples = create_active_examples(selected_questions, sample_df, category)
+            active_examples[category] = examples
             
-            for cat in categories:
-                value = parsed.get(cat, 0)
-                decisions[cat] = 1 if value == 1 else 0
-        else:
-            for cat in categories:
-                pattern = rf'"{cat}"\s*:\s*([01])'
-                match = re.search(pattern, response_text)
-                if match:
-                    decisions[cat] = int(match.group(1))
-                else:
-                    decisions[cat] = 0
+            print(f"✓ Created {len(examples)} examples for {category}")
+            
+        except Exception as e:
+            print(f"⚠ Error in {category}: {e}")
+            print(f"⚠ Using ground truth fallback...")
+            
+            try:
+                examples = []
+                possible_cat_cols = [category.capitalize(), category.lower(), category.upper(), category]
+                found_col = None
+                
+                for cat_col in possible_cat_cols:
+                    if cat_col in sample_df.columns:
+                        found_col = cat_col
+                        break
+                
+                if found_col:
+                    positive_examples = sample_df[sample_df[found_col] == 1][outcome_col].tolist()
+                    negative_examples = sample_df[sample_df[found_col] == 0][outcome_col].tolist()
                     
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Error parsing binary decisions: {e}")
-        decisions = {cat: 0 for cat in categories}
+                    if positive_examples:
+                        examples.append((positive_examples[0], f"This requires {category} thinking. Answer: 1"))
+                    if negative_examples:
+                        examples.append((negative_examples[0], f"This does not require {category} thinking. Answer: 0"))
+                    
+                    active_examples[category] = examples
+                    print(f"✓ Created {len(examples)} fallback examples for {category}")
+                else:
+                    active_examples[category] = []
+                    print(f"⚠ No column found for {category}")
+            
+            except Exception as fallback_error:
+                print(f"⚠ Fallback failed for {category}: {fallback_error}")
+                active_examples[category] = []
     
-    return decisions
+    return active_examples
 
-# Alias for backward compatibility
-def get_rephrase_respond_prediction_multi_class(learning_outcome: str, client) -> Dict[str, int]:
-    """Alias for binary classification to maintain compatibility."""
-    return get_rephrase_respond_prediction_binary_class(learning_outcome, client)
+def create_active_examples(selected_questions: List[str], ground_truth_data: pd.DataFrame, category: str) -> List[Tuple[str, str]]:
+    """Create examples with BETTER column handling"""
+    examples = []
+    
+    try:
+        outcome_col = find_learning_outcome_column(ground_truth_data)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return []
+    
+    for question in selected_questions:
+        matching_rows = ground_truth_data[ground_truth_data[outcome_col] == question]
+        
+        if not matching_rows.empty:
+            possible_cat_cols = [category.capitalize(), category.lower(), category.upper(), category]
+            label = 0
+            
+            for cat_col in possible_cat_cols:
+                if cat_col in matching_rows.columns:
+                    label = int(matching_rows.iloc[0][cat_col])
+                    print(f"✓ Found category column '{cat_col}' for {category}")
+                    break
+            
+            reasoning = create_detailed_reasoning(question, category, label)
+            examples.append((question, reasoning))
+    
+    return examples
+
+def create_detailed_reasoning(learning_outcome: str, category: str, label: int) -> str:
+    """Create detailed reasoning for each example"""
+    
+    category_verbs = {
+        'remember': ['list', 'identify', 'name', 'recall', 'state', 'define', 'describe', 'recognize'],
+        'understand': ['explain', 'describe', 'interpret', 'summarize', 'discuss', 'outline', 'clarify'],
+        'apply': ['use', 'apply', 'solve', 'demonstrate', 'implement', 'calculate', 'execute'],
+        'analyze': ['analyze', 'compare', 'examine', 'break down', 'investigate', 'differentiate'],
+        'evaluate': ['evaluate', 'assess', 'judge', 'critique', 'justify', 'argue', 'defend'],
+        'create': ['create', 'design', 'develop', 'construct', 'generate', 'produce', 'compose']
+    }
+    
+    outcome_lower = learning_outcome.lower()
+    found_verbs = [verb for verb in category_verbs[category] if verb in outcome_lower]
+    
+    if label == 1:
+        if found_verbs:
+            reasoning = f"This requires {category} thinking because it uses the verb '{found_verbs[0]}' which requires students to {get_category_description(category)}. The cognitive demand clearly matches {category} level."
+        else:
+            reasoning = f"This requires {category} thinking as students need to {get_category_description(category)}. The overall cognitive demand is at the {category} level even without explicit keywords."
+    else:
+        actual_category = None
+        for cat, verbs in category_verbs.items():
+            if any(verb in outcome_lower for verb in verbs):
+                actual_category = cat
+                break
+        
+        if actual_category and actual_category != category:
+            reasoning = f"This does NOT require {category} thinking. Instead, it requires {actual_category} level thinking based on the cognitive demands and action verbs used."
+        else:
+            reasoning = f"This does NOT require {category} thinking. The cognitive demands are at a different level of Bloom's taxonomy."
+    
+    return f"{reasoning} Answer: {label}"
+
+def create_cot_reasoning_bloom(learning_outcome: str, category: str, basic_reasoning: str) -> str:
+    """Create detailed Chain-of-Thought reasoning for Bloom taxonomy examples"""
+    
+    # Extract action verbs
+    outcome_lower = learning_outcome.lower()
+    category_verbs = {
+        'remember': ['list', 'identify', 'name', 'recall', 'state', 'define'],
+        'understand': ['explain', 'describe', 'interpret', 'summarize', 'discuss'],
+        'apply': ['use', 'apply', 'solve', 'demonstrate', 'implement', 'calculate'],
+        'analyze': ['analyze', 'compare', 'examine', 'break down', 'investigate'],
+        'evaluate': ['evaluate', 'assess', 'judge', 'critique', 'justify'],
+        'create': ['create', 'design', 'develop', 'construct', 'generate']
+    }
+    
+    found_verbs = [verb for verb in category_verbs.get(category, []) if verb in outcome_lower]
+    
+    # Determine if it requires this category
+    answer = "1" if "requires" in basic_reasoning.lower() else "0"
+    
+    if answer == "1":
+        if found_verbs:
+            detailed_reasoning = f"Let me analyze this step by step: 1) I identify the action verb '{found_verbs[0]}' which is a key indicator for {category} level thinking, 2) This verb requires students to {get_category_description(category)}, 3) The cognitive demand matches {category} because students must go beyond simple recall to engage in {category}-level processes, 4) The learning outcome structure aligns with {category} taxonomy level. Therefore, this requires {category} thinking. Answer: 1"
+        else:
+            detailed_reasoning = f"Let me analyze this step by step: 1) While specific {category} verbs aren't present, the overall cognitive demand requires {category} thinking, 2) Students must {get_category_description(category)} to achieve this outcome, 3) The complexity level and mental processes needed align with {category} taxonomy, 4) The learning expectations go beyond lower-order thinking. Therefore, this requires {category} thinking. Answer: 1"
+    else:
+        # Find what category it actually is
+        actual_category = None
+        for cat, verbs in category_verbs.items():
+            if any(verb in outcome_lower for verb in verbs):
+                actual_category = cat
+                break
+        
+        if actual_category and actual_category != category:
+            detailed_reasoning = f"Let me analyze this step by step: 1) I identify action verbs that suggest {actual_category} rather than {category}, 2) The cognitive demand requires students to {get_category_description(actual_category)}, 3) This is different from {category} which would require {get_category_description(category)}, 4) The learning outcome aligns with {actual_category} taxonomy level. Therefore, this does NOT require {category} thinking. Answer: 0"
+        else:
+            detailed_reasoning = f"Let me analyze this step by step: 1) The action verbs and cognitive demand don't align with {category} requirements, 2) Students are not required to {get_category_description(category)}, 3) The learning outcome represents a different taxonomy level, 4) The mental processes required are not characteristic of {category}. Therefore, this does NOT require {category} thinking. Answer: 0"
+    
+    return detailed_reasoning
+
+def get_category_description(category: str) -> str:
+    """Get description for each category"""
+    descriptions = {
+        'remember': 'recall and retrieve factual information',
+        'understand': 'explain and interpret concepts',
+        'apply': 'use knowledge in new situations',
+        'analyze': 'break down and examine relationships',
+        'evaluate': 'make judgments and assess value',
+        'create': 'combine elements to form something new'
+    }
+    return descriptions.get(category, f'perform {category} level thinking')
